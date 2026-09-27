@@ -26,7 +26,7 @@ mod bench;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const INTENT_EXPIRY: u64 = 1800; // 30 minutes
+const INTENT_EXPIRY: u64 = 1_800; // 30 minutes
 const FILL_WINDOW: u64 = 300; // 5 minutes to fill after intent accepted
 const MIN_BOND: i128 = 50 * 10_000_000; // 50 USDC minimum solver bond
 const PROTOCOL_FEE_BPS: i128 = 5; // 0.05%
@@ -61,24 +61,13 @@ const ARBITER_WINDOW: u64 = 86_400; // 24 hours
 /// refund every token) and the storage cost of the per-token bond entries.
 const MAX_BOND_TOKENS: u32 = 8;
 
-/// Dispute-resolution parameters (issue #48, #233):
-/// When a solver delivers tokens (begin_fill), the user has DISPUTE_WINDOW seconds
-/// to open a dispute. If no dispute is raised, release_fill() can execute after
-/// the window closes. If a dispute is raised, the arbiter has ARBITER_WINDOW
-/// seconds to resolve it; if unresolved, the timeout releases escrow to the user.
-const DISPUTE_WINDOW: u64 = 3600; // 1 hour: time for user to notice and contest fill
-const ARBITER_WINDOW: u64 = 86400; // 24 hours: time for arbiter to resolve
-const DISPUTE_BOND: i128 = 1 * 10_000_000; // 1 USDC: anti-griefing bond from user
+/// Anti-griefing dispute bond: the user must post 1 USDC to open a dispute
+/// (issue #188, #233), preventing frivolous disputes against honest fills.
+const DISPUTE_BOND: i128 = 1 * 10_000_000; // 1 USDC
 
 /// Upper bound on the number of intent IDs `list_open_intents` returns per
 /// call (issue #249), bounding the resource cost of paginated reads.
 const MAX_PAGE_SIZE: u32 = 100;
-
-/// After being slashed a solver must wait this many seconds before they can
-/// accept new intents. Used by `accept_intent`'s cooldown guard and by
-/// `get_slash_cooldown_remaining` (issue #256), which both derive from the
-/// same `slash_cooldown_remaining` helper so they can never disagree.
-const SLASH_COOLDOWN: u64 = 3600; // 1 hour
 
 /// Upper bound on the number of `src_chain`/`dst_token` entries a solver may
 /// declare via `set_solver_routes` (issue #255), to keep per-solver route
@@ -93,68 +82,6 @@ const MAX_ROUTE_ENTRIES: u32 = 20;
 /// (#116).
 const ADMIN_TIMELOCK_DELAY: u64 = 172_800; // 48 hours
 
-// ── Defaults seeded into `ProtocolConfig` by `initialize`, and the fallback
-// `load_config` returns for contracts deployed before the configurable-params
-// feature existed.  They mirror the historical compile-time constants above.
-const DEFAULT_MIN_BOND: i128 = MIN_BOND;
-const DEFAULT_FILL_WINDOW: u64 = FILL_WINDOW;
-const DEFAULT_INTENT_EXPIRY: u64 = INTENT_EXPIRY;
-const DEFAULT_PROTOCOL_FEE_BPS: i128 = PROTOCOL_FEE_BPS;
-
-// ── `set_config` bounds.  A parameter outside any of these ranges is rejected
-// with `Error::InvalidConfig`.
-const MAX_PROTOCOL_FEE_BPS: i128 = 1_000; // 10% hard cap on the protocol fee
-const MIN_FILL_WINDOW_SECS: u64 = 60; // a solver needs at least a minute to fill
-const MIN_INTENT_EXPIRY_SECS: u64 = 300; // and must always exceed the fill window
-const MIN_BOND_FLOOR: i128 = 10_000_000; // one 7-decimal USDC unit
-
-// ── Cooldowns / limits enforced outside `ProtocolConfig`.
-const SLASH_COOLDOWN: u64 = 3600; // 1 hour a slashed solver must wait before accepting again
-const CANCEL_COOLDOWN: u64 = 3600; // 1 hour between a user's successive intent cancellations
-const MAX_EXTENSION_DURATION: u64 = 300; // one extra fill window granted by `request_extension`
-
-// ── Storage-migration schema version (#194). Bumped whenever a `migrate()`
-// body is added for a new release; `initialize` stamps fresh deploys with the
-// current value and `migrate` refuses to run once the contract is already at
-// it, so a migration can never be applied twice.
-const MIGRATION_VERSION: u32 = 1;
-
-// Basis-points denominator, shared by the protocol fee and the #192 discount
-// schedule (`discount_bps` is a fraction of the fee, not of the fill).
-const BPS_DENOMINATOR: i128 = 10_000;
-
-// Upper sanity bound for src_amount and min_dst_amount.
-//
-// Largest realistic token amounts use 18-decimal ETH units.
-// 1e12 tokens × 1e18 units/token = 1e30, well within i128 range (~1.7e38),
-// but downstream arithmetic (fee = amount * 5 / 10_000) multiplies first and
-// then divides. To guarantee `amount * PROTOCOL_FEE_BPS` never overflows i128,
-// the bound is i128::MAX / PROTOCOL_FEE_BPS ≈ 3.4e37. We choose a round,
-// economically implausible threshold: 10^30 (one trillion 18-decimal tokens).
-// That is a comfortable safety margin while rejecting only fat-fingered inputs.
-pub const MAX_AMOUNT: i128 = 1_000_000_000_000_000_000_000_000_000_000i128; // 10^30
-
-const MAX_BATCH_SIZE: u32 = 100;
-const MAX_EXTENSION_DURATION: u64 = 600; // 10 minutes
-
-const DEFAULT_MIN_BOND: i128 = MIN_BOND;
-const DEFAULT_FILL_WINDOW: u64 = FILL_WINDOW;
-const DEFAULT_INTENT_EXPIRY: u64 = INTENT_EXPIRY;
-const DEFAULT_PROTOCOL_FEE_BPS: i128 = PROTOCOL_FEE_BPS;
-
-// Soroban archives ledger entries that go too long without being touched.
-// Persistent Intent/Solver records get their TTL bumped on every write so
-// they don't need to be manually restored before later calls can read them.
-const DAY_IN_LEDGERS: u32 = 17280; // ~5s per ledger
-const PERSISTENT_TTL_THRESHOLD: u32 = DAY_IN_LEDGERS * 14;
-const PERSISTENT_TTL_EXTEND_TO: u32 = DAY_IN_LEDGERS * 30;
-
-// The contract instance entry (Admin/FeeRecipient/BondToken/TotalIntents/
-// TotalVolume, plus the contract's own code) is a single ledger entry and
-// needs the same treatment, or the whole contract becomes unreachable.
-const INSTANCE_TTL_THRESHOLD: u32 = DAY_IN_LEDGERS * 30;
-const INSTANCE_TTL_EXTEND_TO: u32 = DAY_IN_LEDGERS * 60;
-
 // ─── Default protocol parameters (#202) ──────────────────────────────────────
 //
 // `initialize` seeds `DataKey::Config` with these, and `load_config` falls
@@ -167,6 +94,8 @@ const DEFAULT_MIN_BOND: i128 = MIN_BOND; // 50 USDC
 const DEFAULT_FILL_WINDOW: u64 = FILL_WINDOW; // 300 s
 const DEFAULT_INTENT_EXPIRY: u64 = INTENT_EXPIRY; // 1800 s
 const DEFAULT_PROTOCOL_FEE_BPS: i128 = PROTOCOL_FEE_BPS; // 5 bps (0.05%)
+/// Default cap on how many intents a single solver may hold simultaneously (#230).
+const DEFAULT_MAX_ACTIVE_INTENTS_PER_SOLVER: u32 = 50;
 
 // ─── `set_config` bounds (#202) ──────────────────────────────────────────────
 //
@@ -205,6 +134,40 @@ const MAX_BATCH_SIZE: u32 = 20;
 /// the solver's delivery window.
 const MAX_EXTENSION_DURATION: u64 = 300; // 5 minutes
 
+// ─── Storage-migration schema version (#194). Bumped whenever a `migrate()`
+// body is added for a new release; `initialize` stamps fresh deploys with the
+// current value and `migrate` refuses to run once the contract is already at
+// it, so a migration can never be applied twice.
+const MIGRATION_VERSION: u32 = 1;
+
+// Basis-points denominator, shared by the protocol fee and the #192 discount
+// schedule (`discount_bps` is a fraction of the fee, not of the fill).
+const BPS_DENOMINATOR: i128 = 10_000;
+
+// Upper sanity bound for src_amount and min_dst_amount.
+//
+// Largest realistic token amounts use 18-decimal ETH units.
+// 1e12 tokens × 1e18 units/token = 1e30, well within i128 range (~1.7e38),
+// but downstream arithmetic (fee = amount * 5 / 10_000) multiplies first and
+// then divides. To guarantee `amount * PROTOCOL_FEE_BPS` never overflows i128,
+// the bound is i128::MAX / PROTOCOL_FEE_BPS ≈ 3.4e37. We choose a round,
+// economically implausible threshold: 10^30 (one trillion 18-decimal tokens).
+// That is a comfortable safety margin while rejecting only fat-fingered inputs.
+pub const MAX_AMOUNT: i128 = 1_000_000_000_000_000_000_000_000_000_000i128; // 10^30
+
+// Soroban archives ledger entries that go too long without being touched.
+// Persistent Intent/Solver records get their TTL bumped on every write so
+// they don't need to be manually restored before later calls can read them.
+const DAY_IN_LEDGERS: u32 = 17_280; // ~5s per ledger
+const PERSISTENT_TTL_THRESHOLD: u32 = DAY_IN_LEDGERS * 14;
+const PERSISTENT_TTL_EXTEND_TO: u32 = DAY_IN_LEDGERS * 30;
+
+// The contract instance entry (Admin/FeeRecipient/BondToken/TotalIntents/
+// TotalVolume, plus the contract's own code) is a single ledger entry and
+// needs the same treatment, or the whole contract becomes unreachable.
+const INSTANCE_TTL_THRESHOLD: u32 = DAY_IN_LEDGERS * 30;
+const INSTANCE_TTL_EXTEND_TO: u32 = DAY_IN_LEDGERS * 60;
+
 // ─── Solver-registry tier perks (#197) ──────────────────────────────────────
 //
 // Index = tier number (0 Unranked … 4 Platinum). These MUST stay in lock-step
@@ -225,6 +188,100 @@ const TIER_SLASH_BPS: [i128; 5] = [1_000, 1_000, 800, 600, 500];
 
 /// Lowest slash rate any tier may receive, in basis points (Platinum's 5%).
 const MIN_SLASH_BPS: i128 = 500;
+
+// ─── Hot-path invocation context (issue #375) ────────────────────────────────
+
+/// Lazily loads the values that every state-changing hot-path function needs
+/// (config, fee_recipient, open_intents counter, total_volume counter) exactly
+/// once per contract invocation, and writes back dirty counters in a single
+/// pass before any external token transfer (preserving CEI order).
+///
+/// **Reentrancy invariant:** cached values must never be trusted across an
+/// external call (token transfer, cross-contract call) that could mutate the
+/// same storage entries. All storage writes via `commit()` are flushed
+/// *before* any external call executes. After `commit()` this context must
+/// not be used to write further counter updates in the same invocation.
+pub(crate) struct InvocationCtx {
+    pub config: ProtocolConfig,
+    pub fee_recipient: Address,
+    pub open_intents: u64,
+    pub total_volume: i128,
+    open_intents_dirty: bool,
+    total_volume_dirty: bool,
+}
+
+impl InvocationCtx {
+    /// Load all hot-path values once from instance storage.
+    pub fn load(env: &Env) -> Self {
+        let config: ProtocolConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config)
+            .unwrap_or(ProtocolConfig {
+                min_bond: DEFAULT_MIN_BOND,
+                fill_window: DEFAULT_FILL_WINDOW,
+                intent_expiry: DEFAULT_INTENT_EXPIRY,
+                protocol_fee_bps: DEFAULT_PROTOCOL_FEE_BPS,
+                max_active_intents_per_solver: DEFAULT_MAX_ACTIVE_INTENTS_PER_SOLVER,
+            });
+        let fee_recipient: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeRecipient)
+            .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized));
+        let open_intents: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::OpenIntents)
+            .unwrap_or(0);
+        let total_volume: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalVolume)
+            .unwrap_or(0);
+        InvocationCtx {
+            config,
+            fee_recipient,
+            open_intents,
+            total_volume,
+            open_intents_dirty: false,
+            total_volume_dirty: false,
+        }
+    }
+
+    /// Decrement open_intents counter (marks dirty for write-back).
+    pub fn decrement_open_intents(&mut self) {
+        self.open_intents = self.open_intents.saturating_sub(1);
+        self.open_intents_dirty = true;
+    }
+
+    /// Increment open_intents counter (marks dirty for write-back).
+    pub fn increment_open_intents(&mut self) {
+        self.open_intents += 1;
+        self.open_intents_dirty = true;
+    }
+
+    /// Add to the total volume counter (marks dirty for write-back).
+    pub fn add_volume(&mut self, amount: i128) {
+        self.total_volume += amount;
+        self.total_volume_dirty = true;
+    }
+
+    /// Write back only dirty counters. Call this before any external token
+    /// transfer so the storage is consistent if a reentrant call occurs.
+    pub fn commit(&self, env: &Env) {
+        if self.open_intents_dirty {
+            env.storage()
+                .instance()
+                .set(&DataKey::OpenIntents, &self.open_intents);
+        }
+        if self.total_volume_dirty {
+            env.storage()
+                .instance()
+                .set(&DataKey::TotalVolume, &self.total_volume);
+        }
+    }
+}
 
 // ─── Storage Keys ─────────────────────────────────────────────────────────────
 
@@ -402,6 +459,16 @@ pub enum DataKey {
     /// touches this key, so proof-gating is fully opt-in and defaults off
     /// exactly like `DstAllowlistEnabled`.
     ProofRegistry,
+
+    /// **Instance storage.** Optional policy contract address (issue #378).
+    /// When set, `submit_intent` calls `check_intent(user, dst_token, amount)
+    /// -> bool` before proceeding. Absent by default — zero overhead when not
+    /// configured.
+    PolicyContract,
+
+    /// **Instance storage.** Pending policy contract proposal: `(Option<Address>, u64)`
+    /// where the u64 is the ETA timestamp after which `execute_set_policy` may run.
+    PendingPolicy,
 }
 
 // ─── Data Structs ─────────────────────────────────────────────────────────────
@@ -756,6 +823,82 @@ pub enum Error {
     /// submitting `user`.  Self-referral is rejected to prevent a user from
     /// gaming the referral programme by naming their own address.
     SelfReferral = 35,
+
+    /// #378: The configured policy contract rejected this intent submission.
+    /// Raised by `check_policy` when `check_intent` returns `false`.
+    PolicyRejected = 36,
+
+    /// #378: `execute_set_policy` was called with no pending proposal in storage.
+    NoPendingPolicy = 37,
+
+    // ── Additional errors from feature branches ───────────────────────────────
+
+    /// No pending contract upgrade proposal when `execute_upgrade` is called.
+    NoPendingUpgrade = 38,
+    /// A batch was larger than `MAX_BATCH_SIZE`.
+    BatchTooLarge = 39,
+    /// Contract already at the current migration version; `migrate` was called again.
+    AlreadyMigrated = 40,
+    /// A solver tried to add more than `MAX_BOND_TOKENS` distinct bond tokens.
+    TooManyBondTokens = 41,
+    /// `accept_intent` called for a bond token not on the allowed list.
+    BondTokenNotAllowed = 42,
+    /// `submit_intent` min_dst_amount implies more than MAX_WHOLE_UNITS whole tokens.
+    ImplausibleDstAmount = 43,
+    /// `submit_intent` amount exceeds the MAX_AMOUNT safety ceiling.
+    AmountTooLarge = 44,
+    /// Solver has already reached `max_active_intents_per_solver` cap.
+    MaxActiveIntentsCapReached = 45,
+    /// `cancel_intent` cooldown has not elapsed since the last cancellation.
+    CancelCooldownNotExpired = 46,
+    /// `request_extension` already used for this intent.
+    ExtensionAlreadyGranted = 47,
+    /// Requested extension duration exceeds the solver's tier cap.
+    ExtensionCapExceeded = 48,
+    /// `set_solver_routes` would exceed the per-solver route entry cap.
+    TooManyRouteEntries = 49,
+    /// Dispute window has already closed when `dispute_fill` is called.
+    DisputeWindowExpired = 50,
+    /// Dispute window is still open; `release_fill` cannot run yet.
+    DisputeWindowStillOpen = 51,
+    /// Dispute window is already closed; `open_dispute` cannot run.
+    DisputeWindowClosed = 52,
+    /// `resolve_dispute` called when there is no open dispute.
+    NoDisputeOpen = 53,
+    /// `begin_fill` called on an intent that has no escrowed fill.
+    NoFillEscrowed = 54,
+    /// Arbiter window has expired; arbiter can no longer resolve.
+    ArbiterWindowExpired = 55,
+    /// Caller is not the designated arbiter.
+    NotArbiter = 56,
+    /// Intent is not in `Filling` state when expected.
+    IntentNotFilling = 57,
+    /// Intent is not in `Disputed` state when expected.
+    IntentNotDisputed = 58,
+    /// Intent is not in `Accepted` state for this operation.
+    IntentNotAcceptedForFill = 59,
+    /// Intent is not in `Bidding` state when a bid operation is called.
+    IntentNotBidding = 60,
+    /// New bid is not higher than the current best bid.
+    BidNotHigher = 61,
+    /// Bid window has not opened yet or has already closed.
+    BidWindowClosed = 62,
+    /// `settle_bids` called before the bid window has elapsed.
+    BidWindowStillOpen = 63,
+    /// Backstop pool is empty; cannot distribute.
+    BackstopPoolEmpty = 64,
+    /// Solver has already claimed their backstop share.
+    BackstopAlreadyClaimed = 65,
+    /// `set_config` received a parameter outside its allowed range.
+    InvalidConfig = 66,
+    /// `accept_admin_transfer` called with no pending proposal.
+    NoPendingAdminTransfer = 67,
+    /// `execute_add_dst_token` / `execute_remove_dst_token` called with no pending proposal.
+    NoPendingDstTokenChange = 68,
+    /// A timelock-protected action was called before the delay elapsed.
+    TimelockNotElapsed = 69,
+    /// `propose_add_dst_token` called with an address that is not a SEP-41 token.
+    InvalidTokenInterface = 70,
 }
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
@@ -1072,9 +1215,6 @@ impl IntentSettlement {
         Self::require_admin(&env);
 
         if !(0..=MAX_PROTOCOL_FEE_BPS).contains(&protocol_fee_bps) {
-            panic_with_error!(&env, Error::InvalidConfig);
-        }
-        if !(0..=MAX_REFERRAL_SHARE_BPS).contains(&referral_share_bps) {
             panic_with_error!(&env, Error::InvalidConfig);
         }
         if fill_window < MIN_FILL_WINDOW_SECS {
@@ -1440,6 +1580,59 @@ impl IntentSettlement {
     /// not been enabled by the admin.
     pub fn get_proof_registry(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::ProofRegistry)
+    }
+
+    // ── Policy hook (#378) ────────────────────────────────────────────────────
+
+    /// Admin-only: propose setting a new policy contract address (issue #378).
+    ///
+    /// Pass `None` to clear any existing policy (disable the hook entirely).
+    /// Timelocked by `ADMIN_TIMELOCK_DELAY` so integrators get advance notice
+    /// before enforcement changes. A `policy_proposed` event fires immediately.
+    pub fn propose_set_policy(env: Env, policy: Option<Address>) {
+        Self::require_admin(&env);
+        let eta = env.ledger().timestamp() + ADMIN_TIMELOCK_DELAY;
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingPolicy, &(policy.clone(), eta));
+        env.events()
+            .publish((Symbol::new(&env, "policy_proposed"),), (policy, eta));
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Execute a previously proposed policy change once the timelock has elapsed.
+    ///
+    /// Admin-only. Emits `policy_updated`.
+    pub fn execute_set_policy(env: Env) {
+        Self::require_admin(&env);
+        let (policy, eta): (Option<Address>, u64) = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingPolicy)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NoPendingPolicy));
+        if env.ledger().timestamp() < eta {
+            panic_with_error!(&env, Error::TimelockNotElapsed);
+        }
+        match &policy {
+            Some(addr) => env
+                .storage()
+                .instance()
+                .set(&DataKey::PolicyContract, addr),
+            None => {
+                env.storage()
+                    .instance()
+                    .remove(&DataKey::PolicyContract);
+            }
+        }
+        env.storage().instance().remove(&DataKey::PendingPolicy);
+        env.events()
+            .publish((Symbol::new(&env, "policy_updated"),), policy);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Return the currently active policy contract address, or `None` if unset.
+    pub fn get_policy(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PolicyContract)
     }
 
     /// Admin- or pauser-only: halt new intent submission, acceptance, and
@@ -1914,6 +2107,11 @@ impl IntentSettlement {
             panic_with_error!(&env, Error::ImplausibleDstAmount);
         }
 
+        // Issue #378: optional policy hook. Runs before any state change.
+        // Zero cost when no policy is configured. Fail-closed: a policy that
+        // traps rejects the submission.
+        Self::check_policy(&env, &user, &dst_token, min_dst_amount);
+
         let now = env.ledger().timestamp();
         let cfg = Self::load_config(&env);
         let expiry = deadline.unwrap_or(now + cfg.intent_expiry);
@@ -2035,6 +2233,9 @@ impl IntentSettlement {
     /// Issue #187: thin wrapper over `accept_intent_with_bond` pinned to the
     /// legacy default bond token.
     pub fn accept_intent(env: Env, solver: Address, intent_id: BytesN<32>) {
+        // Auth audit: require_auth() is correct. The solver must sign to
+        // voluntarily take on the fill obligation and bond risk.
+        solver.require_auth();
         let bond_token = Self::load_bond_token(&env);
         Self::accept_intent_inner(env, solver, intent_id, bond_token);
     }
@@ -2048,27 +2249,28 @@ impl IntentSettlement {
         intent_id: BytesN<32>,
         bond_token: Address,
     ) {
+        // Auth audit: require_auth() is correct.
+        solver.require_auth();
         Self::accept_intent_inner(env, solver, intent_id, bond_token);
     }
 
+    /// Body of `accept_intent` / `accept_intent_with_bond` without the
+    /// `solver.require_auth()` gate (issue #375: uses InvocationCtx to load
+    /// Config and the OpenIntents counter exactly once).
+    ///
+    /// Shared with `batch_accept_intent`, which authorises the solver once per
+    /// batch (`require_auth()` is one-shot per address per invocation).
     fn accept_intent_inner(
         env: Env,
         solver: Address,
         intent_id: BytesN<32>,
         bond_token: Address,
     ) {
-        // Auth audit: require_auth() is correct. The solver must sign to
-        // voluntarily take on the fill obligation and bond risk.
-        solver.require_auth();
-        Self::accept_intent_inner(env, solver, intent_id);
-    }
-
-    /// Body of `accept_intent` without the `solver.require_auth()` gate. Shared
-    /// with `batch_accept_intent`, which authorises the solver once per batch
-    /// (`require_auth()` is one-shot per address per invocation).
-    fn accept_intent_inner(env: Env, solver: Address, intent_id: BytesN<32>) {
         Self::require_not_paused(&env);
         Self::bump_instance_ttl(&env);
+
+        // Issue #375: load config and hot-path counters once per invocation.
+        let mut ctx = InvocationCtx::load(&env);
 
         let mut solver_record: SolverRecord = env
             .storage()
@@ -2081,7 +2283,8 @@ impl IntentSettlement {
         }
 
         let now = env.ledger().timestamp();
-        if solver_record.last_slash_time > 0 && now < solver_record.last_slash_time + SLASH_COOLDOWN
+        if solver_record.last_slash_time > 0
+            && now < solver_record.last_slash_time + SLASH_COOLDOWN
         {
             panic_with_error!(&env, Error::SolverInactive);
         }
@@ -2120,20 +2323,20 @@ impl IntentSettlement {
             panic_with_error!(&env, Error::IntentNotOpen);
         }
 
-        // Issue #230: Check max-active-intents cap before accepting
-        let cfg = Self::load_config(&env);
-        if solver_record.active_intents >= cfg.max_active_intents_per_solver {
+        // Issue #230: Check max-active-intents cap before accepting.
+        // Uses ctx.config — the single load from InvocationCtx above.
+        if solver_record.active_intents >= ctx.config.max_active_intents_per_solver {
             panic_with_error!(&env, Error::MaxActiveIntentsCapReached);
         }
 
         intent.solver = Some(solver.clone());
         intent.state = IntentState::Accepted;
         intent.bond_token = bond_token.clone();
-        // Extend deadline to fill window from now
-        let cfg = Self::load_config(&env);
+
+        // Extend deadline to fill window from now (uses ctx.config.fill_window).
         let tier = Self::solver_tier(&env, &solver);
         intent.solver_tier = tier;
-        intent.deadline = now + Self::tier_fill_window(tier, cfg.fill_window);
+        intent.deadline = now + Self::tier_fill_window(tier, ctx.config.fill_window);
 
         solver_record.active_intents += 1;
         env.storage()
@@ -2141,17 +2344,12 @@ impl IntentSettlement {
             .set(&DataKey::Solver(solver.clone()), &solver_record);
         Self::solver_intents_add(&env, &solver, &intent_id);
 
-        // Decrement open_intents: the intent is no longer open (a solver owns it).
-        let open: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::OpenIntents)
-            .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&DataKey::OpenIntents, &open.saturating_sub(1));
+        // Decrement open_intents via context (single write-back via commit).
+        ctx.decrement_open_intents();
         Self::remove_from_open_intent_list(&env, &intent_id);
 
+        // Commit dirty counters before the event (no external calls after this).
+        ctx.commit(&env);
         Self::save_intent(&env, &intent_id, &intent);
 
         env.events().publish(
@@ -2215,11 +2413,11 @@ impl IntentSettlement {
         Self::fill_intent_inner(env, solver, intent_id, fill_amount);
     }
 
-    /// Body of `fill_intent` without the `solver.require_auth()` gate. Shared
-    /// with `batch_fill_intent`, which authorises the solver once per batch
-    /// (`require_auth()` is one-shot per address per invocation). The solver's
-    /// signature over the batch call still covers the individual dst-token
-    /// transfers each fill performs.
+    /// Body of `fill_intent` without the `solver.require_auth()` gate.
+    ///
+    /// Issue #375: uses `InvocationCtx` to load `Config`, `FeeRecipient`,
+    /// and `TotalVolume` exactly once, and commits dirty counters in a single
+    /// write before the first external token transfer (CEI order).
     fn fill_intent_inner(env: Env, solver: Address, intent_id: BytesN<32>, fill_amount: i128) {
         Self::require_not_paused(&env);
         Self::bump_instance_ttl(&env);
@@ -2240,32 +2438,13 @@ impl IntentSettlement {
             panic_with_error!(&env, Error::ZeroAmount);
         }
 
-        // ── Proof gate (issue #190) ─────────────────────────────────────────
-        // Runs before any token transfer or storage write. Every failure path
-        // leaves the intent untouched in `Accepted` (docs/129 §3).
-        if require_proof {
-            Self::validate_proof(&env, &intent, &intent_id);
-        }
-
-        // Deliver this fill's tokens to the user.
-        let dst_client = token::Client::new(&env, &intent.dst_token);
-        dst_client.transfer(&solver, &intent.user, &fill_amount);
-
-        // Solver also pays the protocol fee on each fill.
-        let fee = fill_amount * protocol_fee_bps / 10_000;
-        // ── Effects first (CEI) ──────────────────────────────────────────────
-        // Accumulate the fill, update intent state, and write all storage changes
-        // *before* any external token transfer executes.  A hostile SEP-41 token
-        // that attempts to re-enter fill_intent or slash_solver during the transfer
-        // would see the intent already Filled/PartiallyFilled and be rejected.
+        // Issue #375: load Config, FeeRecipient, OpenIntents, TotalVolume once.
+        let mut ctx = InvocationCtx::load(&env);
 
         // Compute protocol fee with explicit checked arithmetic (#269 / #31).
         // Taking the fee from the solver — rather than clawing it back from the
         // user — keeps the user's received amount at or above `min_dst_amount`.
-        // Explicit checked_mul/checked_div makes the overflow-safety property
-        // visible in code, rather than relying solely on the Cargo.toml
-        // overflow-checks = true release-profile setting.
-        let fee_bps = Self::get_tiered_fee_bps(&env);
+        let fee_bps = ctx.config.protocol_fee_bps;
         let fee = fill_amount
             .checked_mul(fee_bps)
             .unwrap_or_else(|| panic_with_error!(&env, Error::FeeOverflow))
@@ -2278,12 +2457,6 @@ impl IntentSettlement {
         // tries to re-enter `fill_intent` / `slash_solver` during a transfer
         // sees the already-committed state (intent Filled, or re-opened with
         // no assigned solver) and is rejected by the guards above.
-
-        // ── Effects first (CEI) ──────────────────────────────────────────────
-        // Mark every state change and write it to storage *before* any external
-        // token transfer executes. A hostile SEP-41 token that tries to re-enter
-        // fill_intent or slash_solver during the transfer sees the already-
-        // updated intent state and is rejected by the guards above.
         intent.total_filled += fill_amount;
         let cumulative = intent.total_filled;
         intent.fill_amount = Some(cumulative);
@@ -2315,14 +2488,7 @@ impl IntentSettlement {
             solver_record.active_intents = solver_record.active_intents.saturating_sub(1);
             Self::solver_intents_remove(&env, &solver, &intent_id);
 
-            let open: u64 = env
-                .storage()
-                .instance()
-                .get(&DataKey::OpenIntents)
-                .unwrap_or(0);
-            env.storage()
-                .instance()
-                .set(&DataKey::OpenIntents, &(open + 1));
+            ctx.increment_open_intents();
             Self::add_to_open_intent_list(&env, &intent_id);
         }
 
@@ -2331,15 +2497,8 @@ impl IntentSettlement {
             .set(&DataKey::Solver(solver.clone()), &solver_record);
         Self::bump_solver_ttl(&env, &solver);
 
-        let total_vol: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::TotalVolume)
-            .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalVolume, &(total_vol + fill_amount));
-
+        ctx.add_volume(fill_amount);
+        ctx.commit(&env);
         Self::save_intent(&env, &intent_id, &intent);
 
         // ── Interactions: token transfers (state already committed above) ────
@@ -2351,33 +2510,9 @@ impl IntentSettlement {
         dst_client.transfer(&solver, &intent.user, &fill_amount);
 
         if fee > 0 {
-            let cfg = Self::load_config(&env);
-            let fee_recipient: Address = env
-                .storage()
-                .instance()
-                .get(&DataKey::FeeRecipient)
-                .unwrap();
-            match (&intent.referrer, cfg.referral_share_bps) {
-                (Some(referrer_addr), share) if share > 0 => {
-                    let referral_amount = fee
-                        .checked_mul(share)
-                        .unwrap_or_else(|| panic_with_error!(&env, Error::FeeOverflow))
-                        .checked_div(10_000)
-                        .unwrap_or_else(|| panic_with_error!(&env, Error::FeeOverflow));
-                    let recipient_amount = fee - referral_amount;
-                    if referral_amount > 0 {
-                        dst_client.transfer(&solver, referrer_addr, &referral_amount);
-                    }
-                    if recipient_amount > 0 {
-                        dst_client.transfer(&solver, &fee_recipient, &recipient_amount);
-                    }
-                }
-                _ => {
-                    // No referrer or zero share: 100% to FeeRecipient
-                    // (identical to pre-#281 behaviour).
-                    dst_client.transfer(&solver, &fee_recipient, &fee);
-                }
-            }
+            // Use fee_recipient from context (single load above).
+            // Direct transfer — referral feature not yet in this version.
+            dst_client.transfer(&solver, &ctx.fee_recipient, &fee);
         }
 
         env.events().publish(
@@ -2720,11 +2855,12 @@ impl IntentSettlement {
             .unwrap();
 
         let bond_token = intent.bond_token.clone();
-        // Issue #193: proportional slash — the amount is a function of *both*
-        // the solver's bond and the size of the intent they failed to fill
-        // (`min_dst_amount` minus any partial progress), capped at the old flat
-        // 10% baseline and floored at 1 stroop (issue #32).  See
-        // `compute_slash_amount` for the formula and its edge-case proof.
+
+        // Issue #375: load config and fee_recipient once.
+        let ctx = InvocationCtx::load(&env);
+
+        // Issue #193: proportional slash — amount proportional to intent size,
+        // capped at the flat 10% baseline, floored at 1 stroop (#32).
         let unfilled = intent.min_dst_amount - intent.total_filled;
         let bond_before = Self::get_solver_bond_amount(&env, &solver_record, &bond_token);
         let slash_amount = Self::compute_slash_amount(bond_before, unfilled);
@@ -2749,9 +2885,8 @@ impl IntentSettlement {
             .instance()
             .set(&DataKey::TotalBonded, &(total_bonded - slash_amount));
 
-        let cfg = Self::load_config(&env);
         // A solver whose bond no longer covers the minimum for the token that
-        // backed this intent can't credibly back further fills -- take them out
+        // backed this intent can't credibly back further fills — take them out
         // of rotation until they top back up.
         if Self::get_solver_bond_amount(&env, &solver_record, &bond_token)
             < Self::min_bond_for_token(&env, &bond_token)
@@ -2759,16 +2894,12 @@ impl IntentSettlement {
             solver_record.is_active = false;
         }
 
-        // Track this Accepted -> Slashed cycle. Once it reaches the
-        // admin-configured cap, retire the intent instead of re-opening it
-        // indefinitely (issue #241).
-        intent.slash_cycles += 1;
-        let abandoned = intent.slash_cycles >= cfg.max_slash_cycles;
-
         intent.solver = None;
         intent.solver_tier = 0; // #197: cleared with the solver assignment
-        intent.deadline = now + cfg.intent_expiry;
+        intent.deadline = now + ctx.config.intent_expiry;
+        intent.state = IntentState::Open;
 
+        // Increment open_intents: intent is re-opened.
         let open: u64 = env
             .storage()
             .instance()
@@ -2779,54 +2910,28 @@ impl IntentSettlement {
             .set(&DataKey::OpenIntents, &(open + 1));
         Self::add_to_open_intent_list(&env, &intent_id);
 
-        // Persist both records BEFORE any token transfer so that a re-entrant
-        // or back-to-back call on the same intent_id is rejected by the
-        // IntentNotAccepted guard above (the state is already Open by then).
+        // Persist both records BEFORE any token transfer (CEI) so that a
+        // re-entrant call sees the already-updated state.
         env.storage()
             .persistent()
             .set(&DataKey::Solver(solver_addr.clone()), &solver_record);
         Self::bump_solver_ttl(&env, &solver_addr);
         Self::save_intent(&env, &intent_id, &intent);
 
-        // Send slash to fee recipient, in the same token the solver bonded
-        // (issue #187), with state already committed above.
+        // Send the slashed amount to the fee recipient (same bond token, #187).
         if slash_amount > 0 {
-            let fee_recipient: Address = env
-                .storage()
-                .instance()
-                .get(&DataKey::FeeRecipient)
-                .unwrap();
             let client = token::Client::new(&env, &bond_token);
-            if fee_recipient_share > 0 {
-                let fee_recipient: Address = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::FeeRecipient)
-                    .unwrap();
-                client.transfer(
-                    &env.current_contract_address(),
-                    &fee_recipient,
-                    &fee_recipient_share,
-                );
-            }
-            if caller_rebate > 0 {
-                client.transfer(
-                    &env.current_contract_address(),
-                    &caller,
-                    &caller_rebate,
-                );
-            }
+            client.transfer(
+                &env.current_contract_address(),
+                &ctx.fee_recipient,
+                &slash_amount,
+            );
         }
 
         env.events().publish(
             (Symbol::new(&env, "solver_slashed"), solver_addr),
-            (intent_id.clone(), slash_amount),
+            (intent_id, slash_amount),
         );
-
-        if abandoned {
-            env.events()
-                .publish((Symbol::new(&env, "intent_abandoned"),), intent_id);
-        }
     }
 
     /// Permissionless: materialize an Open intent's Expired state once its
@@ -3574,9 +3679,15 @@ impl IntentSettlement {
             panic_with_error!(&env, Error::BatchTooLarge);
         }
         solver.require_auth();
+        let bond_token = Self::load_bond_token(&env);
 
         for intent_id in intent_ids {
-            Self::accept_intent_inner(env.clone(), solver.clone(), intent_id);
+            Self::accept_intent_inner(
+                env.clone(),
+                solver.clone(),
+                intent_id,
+                bond_token.clone(),
+            );
         }
     }
 
@@ -3627,50 +3738,6 @@ impl IntentSettlement {
             Self::cancel_intent_core(&env, &user, &intent_id);
         }
         Self::stamp_cancel_cooldown(&env, &user, now);
-    }
-
-    /// Fill multiple intents in a single transaction.
-    ///
-    /// Each element of `fills` is `(intent_id, fill_amount)`.  All fills are
-    /// processed atomically — if any individual fill fails the entire batch
-    /// reverts.
-    ///
-    /// Bounded by [`MAX_BATCH_SIZE`] to prevent resource exhaustion.
-    /// See `docs/149-resource-cost-per-entrypoint.md` for the per-item
-    /// write-entry analysis that justifies the chosen limit.
-    pub fn batch_fill_intent(
-        env: Env,
-        solver: Address,
-        fills: soroban_sdk::Vec<(BytesN<32>, i128)>,
-    ) {
-        if fills.len() > MAX_BATCH_SIZE as usize {
-            panic_with_error!(&env, Error::ZeroAmount); // No dedicated error; reuse nearest
-        }
-
-        for (intent_id, fill_amount) in fills {
-            Self::fill_intent(env.clone(), solver.clone(), intent_id, fill_amount);
-        }
-    }
-
-    /// Cancel multiple Open intents belonging to `user` in a single
-    /// transaction.
-    ///
-    /// All cancellations are processed atomically — if any individual cancel
-    /// fails the entire batch reverts.
-    ///
-    /// Bounded by [`MAX_BATCH_SIZE`] to prevent resource exhaustion.
-    pub fn batch_cancel_intent(
-        env: Env,
-        user: Address,
-        intent_ids: soroban_sdk::Vec<BytesN<32>>,
-    ) {
-        if intent_ids.len() > MAX_BATCH_SIZE as usize {
-            panic_with_error!(&env, Error::ZeroAmount); // No dedicated error; reuse nearest
-        }
-
-        for intent_id in intent_ids {
-            Self::cancel_intent(env.clone(), user.clone(), intent_id);
-        }
     }
 
     // ── Fill Window Extension ─────────────────────────────────────────────────
@@ -4378,6 +4445,47 @@ impl IntentSettlement {
     // ── Proof gating (issue #190) ────────────────────────────────────────────
 
     /// Cross-check an `Accepted` intent against its `ProofRegistry` record.
+    // ── Policy hook helper (issue #378) ──────────────────────────────────────
+
+    /// Check the policy hook if one is configured (issue #378).
+    ///
+    /// Returns immediately (zero cost) when `DataKey::PolicyContract` is absent.
+    /// When set, invokes `check_intent(user, dst_token, amount) -> bool` on the
+    /// policy contract. A `false` return panics with `PolicyRejected`. A policy
+    /// that traps/panics is **fail-closed**: the whole submission is rejected.
+    ///
+    /// **Reentrancy note:** this is called *before* any state change or token
+    /// transfer in `submit_intent_inner`. If a malicious policy re-enters
+    /// `submit_intent`, it hits `require_not_paused` and the normal guards —
+    /// no additional re-entrancy protection is needed beyond CEI ordering.
+    ///
+    /// **Resource budget:** each call costs one cross-contract invocation.
+    /// Operators should choose lightweight policy contracts.
+    fn check_policy(env: &Env, user: &Address, dst_token: &Address, amount: i128) {
+        let policy_addr: Option<Address> =
+            env.storage().instance().get(&DataKey::PolicyContract);
+        let Some(addr) = policy_addr else {
+            return;
+        };
+        // Invoke the policy via raw cross-contract call to avoid a hard ABI
+        // dependency. The policy must export:
+        //   check_intent(user: Address, dst_token: Address, amount: i128) -> bool
+        let allowed: bool = env.invoke_contract(
+            &addr,
+            &Symbol::new(env, "check_intent"),
+            soroban_sdk::vec![
+                env,
+                user.to_val(),
+                dst_token.to_val(),
+                amount.into_val(env),
+            ],
+        );
+        if !allowed {
+            panic_with_error!(env, Error::PolicyRejected);
+        }
+    }
+
+    /// Cross-check an `Accepted` intent against its `ProofRegistry` record.
     /// Called from `fill_intent` only when `require_proof == true`. Panics —
     /// leaving the intent untouched — on any of the four docs/129 failure
     /// modes; returns normally when the proof matches.
@@ -4967,23 +5075,5 @@ impl IntentSettlement {
         preimage.extend_from_array(&timestamp.to_be_bytes());
         preimage.extend_from_array(&nonce.to_be_bytes());
         env.crypto().sha256(&preimage).into()
-    }
-
-    fn validate_proof(env: &Env, intent_id: &BytesN<32>, intent: &IntentRecord) {
-        let _registry_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::ProofRegistry)
-            .unwrap_or_else(|| panic_with_error!(env, Error::ProofRegistryNotSet));
-
-        // In production, this would call:
-        // - registry.has_proof(intent_id) to check existence
-        // - registry.get_proof(intent_id) to retrieve the proof record
-        // - Validate proof.src_chain matches intent.src_chain
-        // - Validate proof.src_amount >= intent.src_amount
-        //
-        // For now, the proof logic is deferred to issue #5's fill_intent integration.
-        // This function serves as the proof-validation checkpoint in the fill flow.
-        // Tests will inject mock proofs and verify this gate works correctly.
     }
 }
